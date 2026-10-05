@@ -1,8 +1,8 @@
 # ReelANSI
 
-ReelANSI is a lightweight Linux application for viewing and browsing ANSI artwork, including properly playing ANSI animations.
+ReelANSI is a lightweight Linux application for viewing, browsing, and playing ANSI artwork and animations.
 
-Open an individual ANSI file and browse the other ANSI files in its folder without repeatedly opening and closing files.
+Open an individual ANSI file or an entire folder, then browse the other ANSI files without repeatedly opening and closing files.
 
 ReelANSI is strictly a viewer, not an editor.
 
@@ -18,6 +18,7 @@ ReelANSI is strictly a viewer, not an editor.
 
 ### Files & Browsing
 - Open individual `.ANS` files
+- Open/select a folder containing ANSI files
 - Automatically browse other ANSI files in the same folder
 - Previous / Next navigation with wraparound
 - Left/right arrow keyboard navigation
@@ -27,16 +28,15 @@ ReelANSI is strictly a viewer, not an editor.
 - Display the current file position within the folder
 - Reset artwork view to the top-left when changing files
 
-## In Development
-
-### Files & Browsing
-- Open/select a folder containing ANSI files
-
 ### Animation
-- Animated ANSI playback
+- Progressive ANSI stream playback
 - Play / Pause / Restart controls
-- Adjustable playback speed
-- Simulated modem/BBS speeds
+- Historical modem/BBS playback speeds from 300 baud through 56K
+- Instant playback
+- ANSI-encoded timing and padding respected during playback
+- Cursor movement, positioning, clearing, and screen overwrites during playback
+
+## In Development
 
 ### Interface
 - Fullscreen viewing
@@ -44,4 +44,4 @@ ReelANSI is strictly a viewer, not an editor.
 
 ## Status
 
-Early development. ANSI rendering and folder-based browsing are working.
+Early development. ANSI rendering, folder-based browsing, and ANSI animation playback are working.
