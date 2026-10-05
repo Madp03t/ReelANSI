@@ -89,14 +89,18 @@ def read_sauce(data: bytes):
         "height": int.from_bytes(trailer[98:100], "little"),
         "author": sauce_author,
         "date": sauce_date,
+        # SAUCE character-file flag bit 0 selects non-blinking/iCE colors:
+        # ANSI blink intensity becomes the high bit of the background color.
+        "ice_colors": bool(trailer[105] & 0x01) if len(trailer) > 105 else False,
     }
 
 class ANSIStreamParser:
     """Incremental ANSI terminal parser for static art and ansimation playback."""
 
-    def __init__(self, width=80, height=25):
+    def __init__(self, width=80, height=25, ice_colors=False):
         self.width = max(1, width or 80)
         self.height = max(1, height or 25)
+        self.ice_colors = ice_colors
         self.reset()
 
     def reset(self):
@@ -105,6 +109,7 @@ class ANSIStreamParser:
         self.fg = 7
         self.bg = 0
         self.bold = False
+        self.blink = False
         self.saved_x = 0
         self.saved_y = 0
         self.cells = {}
@@ -157,7 +162,11 @@ class ANSIStreamParser:
         if self.bold and display_fg < 8:
             display_fg += 8
 
-        self.cells[(self.x, self.y)] = (ch, display_fg, self.bg)
+        display_bg = self.bg
+        if self.ice_colors and self.blink and display_bg < 8:
+            display_bg += 8
+
+        self.cells[(self.x, self.y)] = (ch, display_fg, display_bg)
         self.x += 1
 
     def _handle_csi(self, sequence):
@@ -175,13 +184,18 @@ class ANSIStreamParser:
                 if n == 0:
                     self.fg, self.bg = 7, 0
                     self.bold = False
+                    self.blink = False
                 elif n == 1:
                     # VGA/DOS ANSI uses SGR 1 as foreground intensity. Keep
                     # intensity as independent state so a later 30-37 color
                     # selection does not accidentally turn it off.
                     self.bold = True
+                elif n == 5:
+                    self.blink = True
                 elif n == 22:
                     self.bold = False
+                elif n == 25:
+                    self.blink = False
                 elif 30 <= n <= 37:
                     self.fg = n - 30
                 elif 40 <= n <= 47:
@@ -246,8 +260,8 @@ class ANSIStreamParser:
             self.x, self.y = self.saved_x, self.saved_y
 
 
-def parse_ansi(text, fixed_width=80, fixed_height=25):
-    parser = ANSIStreamParser(fixed_width, fixed_height)
+def parse_ansi(text, fixed_width=80, fixed_height=25, ice_colors=False):
+    parser = ANSIStreamParser(fixed_width, fixed_height, ice_colors)
     parser.feed(text)
     return parser.cells
 
@@ -355,6 +369,7 @@ class ReelANSI(QMainWindow):
         self.playback_remainder = 0.0
         self.is_playing = False
         self.is_animation = False
+        self.ice_colors = False
 
         self.settings = QSettings("Madp03t", "ReelANSI")
         self.saved_speed = self.settings.value("playback_speed", 9600, type=int)
@@ -626,6 +641,7 @@ class ReelANSI(QMainWindow):
         sauce_height = sauce["height"] if sauce and sauce["height"] else 0
         self.ansi_height = sauce_height or 25
         self.is_animation = looks_animated(self.ansi_text)
+        self.ice_colors = bool(sauce and sauce.get("ice_colors"))
         self.configure_speed_choices()
 
         if sauce_height >= 1000:
@@ -641,7 +657,12 @@ class ReelANSI(QMainWindow):
         if self.is_animation:
             self.restart_playback(auto_play=True)
         else:
-            parsed = parse_ansi(self.ansi_text, self.ansi_width, self.ansi_height)
+            parsed = parse_ansi(
+                self.ansi_text,
+                self.ansi_width,
+                self.ansi_height,
+                self.ice_colors,
+            )
             rendered_height = max((y for _, y in parsed), default=self.ansi_height - 1) + 1
             self.ansi_height = max(self.ansi_height, rendered_height)
             self.viewer.set_screen(parsed, self.ansi_width, self.ansi_height)
@@ -682,7 +703,11 @@ class ReelANSI(QMainWindow):
             return
 
         self.stop_playback()
-        self.stream_parser = ANSIStreamParser(self.ansi_width, self.ansi_height)
+        self.stream_parser = ANSIStreamParser(
+            self.ansi_width,
+            self.ansi_height,
+            self.ice_colors,
+        )
         self.playback_position = 0
         self.playback_remainder = 0.0
         self.viewer.set_screen({}, self.ansi_width, self.ansi_height)
@@ -699,7 +724,11 @@ class ReelANSI(QMainWindow):
         if not self.ansi_text:
             return
         if self.stream_parser is None or self.playback_position >= len(self.ansi_text):
-            self.stream_parser = ANSIStreamParser(self.ansi_width, self.ansi_height)
+            self.stream_parser = ANSIStreamParser(
+            self.ansi_width,
+            self.ansi_height,
+            self.ice_colors,
+        )
             self.playback_position = 0
             self.playback_remainder = 0.0
             self.viewer.set_screen({}, self.ansi_width, self.ansi_height)
@@ -724,7 +753,11 @@ class ReelANSI(QMainWindow):
         if not self.ansi_text:
             return
         if self.stream_parser is None:
-            self.stream_parser = ANSIStreamParser(self.ansi_width, self.ansi_height)
+            self.stream_parser = ANSIStreamParser(
+            self.ansi_width,
+            self.ansi_height,
+            self.ice_colors,
+        )
         remaining = self.ansi_text[self.playback_position:]
         self.stream_parser.feed(remaining)
         self.playback_position = len(self.ansi_text)

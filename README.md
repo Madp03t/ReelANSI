@@ -16,6 +16,7 @@ ReelANSi is strictly a viewer, not an editor.
 -   IBM VGA 9×16 font rendering
 -   Classic 16-color VGA palette
 -   Correct DOS/VGA foreground intensity handling
+-   SAUCE-aware iCE color / high-intensity background rendering
 -   SAUCE metadata, author/date, and artwork dimensions
 -   Pixel-crisp rendering without text antialiasing
 -   Viewport-aware painting for very tall artwork
@@ -62,11 +63,12 @@ ReelANSi is strictly a viewer, not an editor.
 
 -   Continued ANSI rendering fidelity testing against known-good scene
     artwork
--   Additional ANSI/iCE color and blink compatibility testing
+-   Additional ANSI blink compatibility testing
 -   XBin (`.XB`) support
 -   Further ansimation compatibility testing, including tall animations
 
 ## Status
 
-Early development. ANSI rendering, mixed textmode folder browsing,
-progressive playback, and ANSI animation playback are working.
+Early development. ANSI rendering, including SAUCE-aware iCE colors, mixed
+textmode folder browsing, progressive playback, and ANSI animation playback
+are working.
