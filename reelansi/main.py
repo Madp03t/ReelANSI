@@ -280,8 +280,11 @@ class ANSIViewer(QWidget):
     def __init__(self):
         super().__init__()
         self.cells = {}
-        self.cell_width = 9
-        self.cell_height = 16
+        self.base_cell_width = 9
+        self.base_cell_height = 16
+        self.zoom = 1.0
+        self.cell_width = self.base_cell_width
+        self.cell_height = self.base_cell_height
         self.screen_width = 80
         self.screen_height = 25
 
@@ -295,7 +298,28 @@ class ANSIViewer(QWidget):
         font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
 
         self.font = QFont(font_family)
-        self.font.setPixelSize(16)
+        self.font.setPixelSize(self.base_cell_height)
+
+    def set_zoom(self, zoom):
+        self.zoom = zoom
+        self.cell_width = max(1, round(self.base_cell_width * zoom))
+        self.cell_height = max(1, round(self.base_cell_height * zoom))
+        self.font.setPixelSize(self.cell_height)
+        self.update_canvas_size()
+
+    def update_canvas_size(self):
+        max_x = max((x for x, _ in self.cells), default=self.screen_width - 1)
+        max_y = max((y for _, y in self.cells), default=self.screen_height - 1)
+        display_width = max(self.screen_width, max_x + 1)
+        display_height = max(self.screen_height, max_y + 1)
+
+        pixel_width = display_width * self.cell_width
+        pixel_height = display_height * self.cell_height
+        self.resize(pixel_width, pixel_height)
+        self.setMinimumSize(pixel_width, pixel_height)
+        self.setMaximumSize(pixel_width, pixel_height)
+        self.updateGeometry()
+        self.update()
 
     def set_screen(self, cells, width=None, height=None):
         self.cells = dict(cells)
@@ -304,22 +328,7 @@ class ANSIViewer(QWidget):
         if height:
             self.screen_height = height
 
-        max_x = max((x for x, _ in self.cells), default=self.screen_width - 1)
-        max_y = max((y for _, y in self.cells), default=self.screen_height - 1)
-        display_width = max(self.screen_width, max_x + 1)
-        display_height = max(self.screen_height, max_y + 1)
-
-        # QWidget has a platform-dependent maximum dimension (commonly 16,777,215
-        # pixels), but extremely tall ANSI art can still make a conventional giant
-        # child widget awkward for QScrollArea. Keep the real artwork dimensions
-        # here; QScrollArea will scroll this logical canvas normally.
-        pixel_width = display_width * self.cell_width
-        pixel_height = display_height * self.cell_height
-        self.resize(pixel_width, pixel_height)
-        self.setMinimumSize(pixel_width, pixel_height)
-        self.setMaximumSize(pixel_width, pixel_height)
-        self.updateGeometry()
-        self.update()
+        self.update_canvas_size()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -370,6 +379,9 @@ class ReelANSI(QMainWindow):
         self.is_playing = False
         self.is_animation = False
         self.ice_colors = False
+        self.zoom_levels = [0.50, 0.75, 1.00, 1.25, 1.50, 2.00]
+        self.zoom_factor = 1.00
+        self.fit_to_window = False
 
         self.settings = QSettings("Madp03t", "ReelANSI")
         self.saved_speed = self.settings.value("playback_speed", 9600, type=int)
@@ -401,6 +413,27 @@ class ReelANSI(QMainWindow):
         maximize_action.setShortcut("F11")
         maximize_action.triggered.connect(self.toggle_maximized)
         view_menu.addAction(maximize_action)
+
+        view_menu.addSeparator()
+
+        zoom_in_action = QAction("Zoom &In", self)
+        zoom_in_action.setShortcut("Ctrl++")
+        zoom_in_action.triggered.connect(self.zoom_in)
+        view_menu.addAction(zoom_in_action)
+
+        zoom_out_action = QAction("Zoom &Out", self)
+        zoom_out_action.setShortcut("Ctrl+-")
+        zoom_out_action.triggered.connect(self.zoom_out)
+        view_menu.addAction(zoom_out_action)
+
+        actual_size_action = QAction("&Actual Size", self)
+        actual_size_action.setShortcut("Ctrl+0")
+        actual_size_action.triggered.connect(self.actual_size)
+        view_menu.addAction(actual_size_action)
+
+        fit_action = QAction("&Fit to Window", self)
+        fit_action.triggered.connect(self.fit_artwork_to_window)
+        view_menu.addAction(fit_action)
 
         previous_action = QAction("Previous ANSI", self)
         previous_action.setShortcut(Qt.Key.Key_Left)
@@ -496,6 +529,10 @@ class ReelANSI(QMainWindow):
         self.position_info = QLabel("0 / 0")
         self.position_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        self.zoom_info = QLabel("100%")
+        self.zoom_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.zoom_info.setMinimumWidth(45)
+
         self.next_button = QLabel("▶")
         self.next_button.setToolTip("Next ANSI (Right Arrow)")
         self.next_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -507,6 +544,8 @@ class ReelANSI(QMainWindow):
         nav_layout.addWidget(self.previous_button)
         nav_layout.addWidget(self.position_info)
         nav_layout.addWidget(self.next_button)
+        nav_layout.addSpacing(8)
+        nav_layout.addWidget(self.zoom_info)
 
         status_layout.addWidget(self.file_info)
         status_layout.addWidget(self.large_ansi_warning)
@@ -542,6 +581,11 @@ class ReelANSI(QMainWindow):
             preferred = self.saved_speed if self.saved_speed is not None else current_speed
             self.populate_speed_combo(self.normal_speed_options, preferred)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.fit_to_window and hasattr(self, "viewer"):
+            QTimer.singleShot(0, self.fit_artwork_to_window)
+
     def closeEvent(self, event):
         # Preserve the normal size even when ReelANSi is closed while maximized.
         rect = self.normalGeometry() if self.isMaximized() else self.geometry()
@@ -560,6 +604,48 @@ class ReelANSI(QMainWindow):
         else:
             self.normal_window_size = self.size()
             self.showMaximized()
+
+    def apply_zoom(self, zoom, fit=False):
+        self.zoom_factor = zoom
+        self.fit_to_window = fit
+        self.viewer.set_zoom(zoom)
+        self.zoom_info.setText(f"{round(zoom * 100)}%")
+
+    def zoom_in(self):
+        current = self.zoom_factor
+        for level in self.zoom_levels:
+            if level > current + 0.001:
+                self.apply_zoom(level)
+                return
+
+    def zoom_out(self):
+        current = self.zoom_factor
+        for level in reversed(self.zoom_levels):
+            if level < current - 0.001:
+                self.apply_zoom(level)
+                return
+
+    def actual_size(self):
+        self.apply_zoom(1.0)
+
+    def fit_artwork_to_window(self):
+        if not self.current_file:
+            return
+
+        viewport = self.scroll_area.viewport().size()
+        native_width = self.viewer.screen_width * self.viewer.base_cell_width
+        native_height = self.viewer.screen_height * self.viewer.base_cell_height
+        if native_width <= 0 or native_height <= 0:
+            return
+
+        zoom = min(
+            viewport.width() / native_width,
+            viewport.height() / native_height,
+            1.0,
+        )
+        # Keep cells usable and avoid zero-sized geometry on exceptionally tall art.
+        zoom = max(0.10, zoom)
+        self.apply_zoom(zoom, fit=True)
 
     def set_large_ansi_status(self, status=None):
         self.large_loaded_timer.stop()
@@ -585,7 +671,7 @@ class ReelANSI(QMainWindow):
         files = [
             os.path.join(folder, file)
             for file in os.listdir(folder)
-            if file.lower().endswith((".ans", ".asc"))
+            if file.lower().endswith((".ans", ".asc", ".flp"))
             or file.lower() == "file_id.diz"
         ]
 
@@ -603,7 +689,7 @@ class ReelANSI(QMainWindow):
             self,
             "Open Textmode File",
             "",
-            "Textmode Files (*.ans *.ANS *.asc *.ASC *.diz *.DIZ)",
+            "Textmode Files (*.ans *.ANS *.asc *.ASC *.flp *.FLP *.diz *.DIZ)",
         )
 
         if filename:
@@ -689,6 +775,8 @@ class ReelANSI(QMainWindow):
             self.position_info.setText("0 / 0")
 
         QApplication.processEvents()
+        if self.fit_to_window:
+            self.fit_artwork_to_window()
         self.scroll_area.horizontalScrollBar().setValue(0)
         self.scroll_area.verticalScrollBar().setValue(0)
 
