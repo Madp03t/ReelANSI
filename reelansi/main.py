@@ -1,4 +1,11 @@
-import os 
+"""
+ReelANSI
+A lightweight Linux ANSI art viewer.
+
+Code by Eric Montgomery (Madp03t)
+"""
+
+import os
 import sys
 import re
 
@@ -7,6 +14,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
     QMainWindow,
+    QHBoxLayout,
     QVBoxLayout,
     QWidget,
     QScrollArea,
@@ -201,12 +209,25 @@ class ReelANSI(QMainWindow):
     def __init__(self):
         super().__init__()
 
+        self.current_file = None
+        self.ansi_files = []
+
         file_menu = self.menuBar().addMenu("&File")
 
         open_action = QAction("&Open ANSI...", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self.open_ansi)
         file_menu.addAction(open_action)
+
+        previous_action = QAction("Previous ANSI", self)
+        previous_action.setShortcut(Qt.Key.Key_Left)
+        previous_action.triggered.connect(self.previous_ansi)
+        self.addAction(previous_action)
+
+        next_action = QAction("Next ANSI", self)
+        next_action.setShortcut(Qt.Key.Key_Right)
+        next_action.triggered.connect(self.next_ansi)
+        self.addAction(next_action)
 
         self.setWindowTitle("ReelANSI v0.1  •  by Madp03t")
         self.resize(1000, 700)
@@ -221,8 +242,41 @@ class ReelANSI(QMainWindow):
         self.scroll_area.setWidgetResizable(False)
 
         layout.addWidget(self.scroll_area, 1)
+
+        status_layout = QHBoxLayout()
+        status_layout.setContentsMargins(0, 0, 0, 0)
+
         self.file_info = QLabel("No file open")
-        layout.addWidget(self.file_info)
+        self.folder_info = QLabel("")
+        self.folder_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.previous_button = QLabel("◀")
+        self.previous_button.setToolTip("Previous ANSI (Left Arrow)")
+        self.previous_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.previous_button.mousePressEvent = lambda event: self.previous_ansi()
+
+        self.position_info = QLabel("0 / 0")
+        self.position_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.next_button = QLabel("▶")
+        self.next_button.setToolTip("Next ANSI (Right Arrow)")
+        self.next_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.next_button.mousePressEvent = lambda event: self.next_ansi()
+
+        nav_layout = QHBoxLayout()
+        nav_layout.setContentsMargins(0, 0, 0, 0)
+        nav_layout.setSpacing(8)
+        nav_layout.addWidget(self.previous_button)
+        nav_layout.addWidget(self.position_info)
+        nav_layout.addWidget(self.next_button)
+
+        status_layout.addWidget(self.file_info)
+        status_layout.addStretch(1)
+        status_layout.addWidget(self.folder_info)
+        status_layout.addStretch(1)
+        status_layout.addLayout(nav_layout)
+
+        layout.addLayout(status_layout)
 
         self.setCentralWidget(container)
 
@@ -235,28 +289,88 @@ class ReelANSI(QMainWindow):
         )
 
         if filename:
-            with open(filename, "rb") as file:
-                ansi_data = file.read()
-            sauce = read_sauce(ansi_data)
-            print(f"SAUCE: {sauce}")
+            folder = os.path.dirname(filename)
 
-            print(f"Read {len(ansi_data)} bytes from {filename}")
-            print(repr(ansi_data[:200]))
-            sauce_position = ansi_data.rfind(b"SAUCE00")
-            ansi_content = ansi_data[:sauce_position] if sauce_position != -1 else ansi_data
-            ansi_content = ansi_content.rstrip(b"\x1a")
-            print(f"ANSI content: {len(ansi_content)} bytes")
-            decoded = ansi_content.decode("cp437")
-            print(decoded)
-            width = sauce["width"] if sauce else 80
-            parsed = parse_ansi(decoded, width)
-            print(f"Parsed ANSI: {parsed}")
-            self.viewer.set_ansi(parsed)
-            name = os.path.basename(filename)
-            height = sauce["height"] if sauce else len(parsed)
-            self.file_info.setText(f"{name}   •   {width} × {height}")
-            print(f"SAUCE starts at byte: {sauce_position}")
+            self.ansi_files = sorted(
+                (
+                    os.path.join(folder, file)
+                    for file in os.listdir(folder)
+                    if file.lower().endswith(".ans")
+                ),
+                key=lambda path: os.path.basename(path).lower(),
+            )
 
+            self.load_ansi(filename)
+
+    def load_ansi(self, filename):
+        with open(filename, "rb") as file:
+            ansi_data = file.read()
+
+        sauce = read_sauce(ansi_data)
+        print(f"SAUCE: {sauce}")
+
+        print(f"Read {len(ansi_data)} bytes from {filename}")
+        print(repr(ansi_data[:200]))
+
+        sauce_position = ansi_data.rfind(b"SAUCE00")
+        ansi_content = ansi_data[:sauce_position] if sauce_position != -1 else ansi_data
+        ansi_content = ansi_content.rstrip(b"\x1a")
+
+        print(f"ANSI content: {len(ansi_content)} bytes")
+
+        decoded = ansi_content.decode("cp437")
+        print(decoded)
+
+        width = sauce["width"] if sauce else 80
+        parsed = parse_ansi(decoded, width)
+
+        print(f"Parsed ANSI: {parsed}")
+
+        self.viewer.set_ansi(parsed)
+        self.current_file = filename
+
+        name = os.path.basename(filename)
+        folder = os.path.dirname(filename)
+        height = sauce["height"] if sauce else len(parsed)
+
+        self.file_info.setText(f"{name}   •   {width} × {height}")
+        self.folder_info.setText(folder)
+
+        try:
+            current_index = self.ansi_files.index(filename)
+            self.position_info.setText(f"{current_index + 1} / {len(self.ansi_files)}")
+        except ValueError:
+            self.position_info.setText("0 / 0")
+
+        QApplication.processEvents()
+        self.scroll_area.horizontalScrollBar().setValue(0)
+        self.scroll_area.verticalScrollBar().setValue(0)
+
+        print(f"SAUCE starts at byte: {sauce_position}")
+
+    def previous_ansi(self):
+        if not self.current_file or not self.ansi_files:
+            return
+
+        try:
+            current_index = self.ansi_files.index(self.current_file)
+        except ValueError:
+            return
+
+        previous_index = (current_index - 1) % len(self.ansi_files)
+        self.load_ansi(self.ansi_files[previous_index])
+
+    def next_ansi(self):
+        if not self.current_file or not self.ansi_files:
+            return
+
+        try:
+            current_index = self.ansi_files.index(self.current_file)
+        except ValueError:
+            return
+
+        next_index = (current_index + 1) % len(self.ansi_files)
+        self.load_ansi(self.ansi_files[next_index])
 
 def main():
     app = QApplication(sys.argv)
