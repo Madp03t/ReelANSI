@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QScrollArea,
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase, QPainter
 
 ANSI_COLOR_MAP = {
@@ -70,9 +70,25 @@ def read_sauce(data: bytes):
     if trailer[:5] != b"SAUCE":
         return None
 
+    raw_author = trailer[42:62].decode("cp437", errors="replace").rstrip(" \x00")
+    sauce_author = raw_author or None
+
+    raw_date = trailer[82:90].decode("ascii", errors="ignore")
+    sauce_date = None
+    if len(raw_date) == 8 and raw_date.isdigit():
+        year, month, day = raw_date[:4], raw_date[4:6], raw_date[6:8]
+        try:
+            import datetime
+            datetime.date(int(year), int(month), int(day))
+            sauce_date = f"{year}-{month}-{day}"
+        except ValueError:
+            pass
+
     return {
         "width": int.from_bytes(trailer[96:98], "little"),
         "height": int.from_bytes(trailer[98:100], "little"),
+        "author": sauce_author,
+        "date": sauce_date,
     }
 
 class ANSIStreamParser:
@@ -88,6 +104,7 @@ class ANSIStreamParser:
         self.y = 0
         self.fg = 7
         self.bg = 0
+        self.bold = False
         self.saved_x = 0
         self.saved_y = 0
         self.cells = {}
@@ -136,7 +153,11 @@ class ANSIStreamParser:
             self.x = 0
             self.y += 1
 
-        self.cells[(self.x, self.y)] = (ch, self.fg, self.bg)
+        display_fg = self.fg
+        if self.bold and display_fg < 8:
+            display_fg += 8
+
+        self.cells[(self.x, self.y)] = (ch, display_fg, self.bg)
         self.x += 1
 
     def _handle_csi(self, sequence):
@@ -153,17 +174,20 @@ class ANSIStreamParser:
             for n in nums or [0]:
                 if n == 0:
                     self.fg, self.bg = 7, 0
+                    self.bold = False
                 elif n == 1:
-                    if self.fg < 8:
-                        self.fg += 8
+                    # VGA/DOS ANSI uses SGR 1 as foreground intensity. Keep
+                    # intensity as independent state so a later 30-37 color
+                    # selection does not accidentally turn it off.
+                    self.bold = True
                 elif n == 22:
-                    if self.fg >= 8:
-                        self.fg -= 8
+                    self.bold = False
                 elif 30 <= n <= 37:
                     self.fg = n - 30
                 elif 40 <= n <= 47:
                     self.bg = n - 40
                 elif 90 <= n <= 97:
+                    # Explicit bright foreground colors do not need SGR 1.
                     self.fg = n - 90 + 8
                 elif 100 <= n <= 107:
                     self.bg = n - 100 + 8
@@ -270,16 +294,37 @@ class ANSIViewer(QWidget):
         max_y = max((y for _, y in self.cells), default=self.screen_height - 1)
         display_width = max(self.screen_width, max_x + 1)
         display_height = max(self.screen_height, max_y + 1)
-        self.setFixedSize(display_width * self.cell_width, display_height * self.cell_height)
+
+        # QWidget has a platform-dependent maximum dimension (commonly 16,777,215
+        # pixels), but extremely tall ANSI art can still make a conventional giant
+        # child widget awkward for QScrollArea. Keep the real artwork dimensions
+        # here; QScrollArea will scroll this logical canvas normally.
+        pixel_width = display_width * self.cell_width
+        pixel_height = display_height * self.cell_height
+        self.resize(pixel_width, pixel_height)
+        self.setMinimumSize(pixel_width, pixel_height)
+        self.setMaximumSize(pixel_width, pixel_height)
+        self.updateGeometry()
         self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, False)
         painter.setFont(self.font)
-        painter.fillRect(self.rect(), QColor(*VGA_COLORS[0]))
+
+        exposed = event.rect()
+        painter.fillRect(exposed, QColor(*VGA_COLORS[0]))
+
+        # Only paint rows that intersect the exposed viewport. Extremely tall
+        # ANSI art stays fully scrollable without repainting thousands of
+        # offscreen rows on every scroll movement.
+        first_row = max(0, exposed.top() // self.cell_height)
+        last_row = max(first_row, exposed.bottom() // self.cell_height)
 
         for (x, y), (ch, fg, bg) in self.cells.items():
+            if y < first_row or y > last_row:
+                continue
+
             fg_color = QColor(*VGA_COLORS[fg])
             bg_color = QColor(*VGA_COLORS[bg])
             left = x * self.cell_width
@@ -311,9 +356,17 @@ class ReelANSI(QMainWindow):
         self.is_playing = False
         self.is_animation = False
 
+        self.settings = QSettings("Madp03t", "ReelANSI")
+        self.saved_speed = self.settings.value("playback_speed", 9600, type=int)
+
         self.playback_timer = QTimer(self)
         self.playback_timer.setInterval(16)
         self.playback_timer.timeout.connect(self.playback_tick)
+
+        self.large_loaded_timer = QTimer(self)
+        self.large_loaded_timer.setSingleShot(True)
+        self.large_loaded_timer.setInterval(5000)
+        self.large_loaded_timer.timeout.connect(self.clear_large_loaded_status)
 
         file_menu = self.menuBar().addMenu("&File")
 
@@ -327,6 +380,13 @@ class ReelANSI(QMainWindow):
         open_folder_action.triggered.connect(self.open_folder)
         file_menu.addAction(open_folder_action)
 
+        view_menu = self.menuBar().addMenu("&View")
+
+        maximize_action = QAction("&Maximize Window", self)
+        maximize_action.setShortcut("F11")
+        maximize_action.triggered.connect(self.toggle_maximized)
+        view_menu.addAction(maximize_action)
+
         previous_action = QAction("Previous ANSI", self)
         previous_action.setShortcut(Qt.Key.Key_Left)
         previous_action.triggered.connect(self.previous_ansi)
@@ -337,8 +397,14 @@ class ReelANSI(QMainWindow):
         next_action.triggered.connect(self.next_ansi)
         self.addAction(next_action)
 
-        self.setWindowTitle("ReelANSI v0.1  •  by Madp03t")
-        self.resize(1000, 700)
+        self.setWindowTitle("ReelANSi v0.1  •  by Madp03t")
+
+        # Restore the last normal window size. Wayland deliberately controls
+        # top-level window placement, so ReelANSi does not persist x/y position.
+        saved_width = self.settings.value("window_width", 1000, type=int)
+        saved_height = self.settings.value("window_height", 700, type=int)
+        self.resize(saved_width, saved_height)
+        self.normal_window_size = self.size()
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -348,6 +414,9 @@ class ReelANSI(QMainWindow):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidget(self.viewer)
         self.scroll_area.setWidgetResizable(False)
+        self.scroll_area.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+        )
 
         layout.addWidget(self.scroll_area, 1)
 
@@ -364,15 +433,20 @@ class ReelANSI(QMainWindow):
 
         self.speed_label = QLabel("Playback")
         self.speed_combo = QComboBox()
-        self.speed_combo.addItem("300 baud", 300)
-        self.speed_combo.addItem("1200 baud", 1200)
-        self.speed_combo.addItem("2400 baud", 2400)
-        self.speed_combo.addItem("9600 baud", 9600)
-        self.speed_combo.addItem("14.4K", 14400)
-        self.speed_combo.addItem("28.8K", 28800)
-        self.speed_combo.addItem("56K", 56000)
-        self.speed_combo.addItem("Instant", 0)
-        self.speed_combo.setCurrentIndex(3)
+        self.normal_speed_options = [
+            ("300 baud", 300),
+            ("1200 baud", 1200),
+            ("2400 baud", 2400),
+            ("9600 baud", 9600),
+            ("14.4K", 14400),
+            ("28.8K", 28800),
+            ("56K", 56000),
+            ("115.2K", 115200),
+            ("230.4K", 230400),
+            ("Instant", 0),
+        ]
+        self.animation_speed_options = [item for item in self.normal_speed_options if item[1] != 0]
+        self.populate_speed_combo(self.normal_speed_options, self.saved_speed)
         self.speed_combo.currentIndexChanged.connect(self.playback_speed_changed)
 
         playback_layout.addWidget(self.play_button)
@@ -386,6 +460,16 @@ class ReelANSI(QMainWindow):
         status_layout.setContentsMargins(0, 0, 0, 0)
 
         self.file_info = QLabel("No file open")
+
+        self.large_ansi_warning = QLabel("⚠  LARGE ANSI")
+        self.large_ansi_warning.setStyleSheet(
+            "QLabel { color: #ffcc00; font-weight: bold; }"
+        )
+        self.large_ansi_warning.setToolTip(
+            "Large ANSI artwork. Scrolling and rendering may require more resources."
+        )
+        self.large_ansi_warning.hide()
+
         self.folder_info = QLabel("")
         self.folder_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -410,6 +494,7 @@ class ReelANSI(QMainWindow):
         nav_layout.addWidget(self.next_button)
 
         status_layout.addWidget(self.file_info)
+        status_layout.addWidget(self.large_ansi_warning)
         status_layout.addStretch(1)
         status_layout.addWidget(self.folder_info)
         status_layout.addStretch(1)
@@ -419,38 +504,107 @@ class ReelANSI(QMainWindow):
 
         self.setCentralWidget(container)
 
-    def ansi_files_in_folder(self, folder):
+        self.restore_maximized = self.settings.value("window_maximized", False, type=bool)
+
+    def populate_speed_combo(self, options, preferred_speed):
+        self.speed_combo.blockSignals(True)
+        self.speed_combo.clear()
+        for label, value in options:
+            self.speed_combo.addItem(label, value)
+
+        index = self.speed_combo.findData(preferred_speed)
+        if index < 0:
+            index = self.speed_combo.findData(115200 if self.is_animation else 9600)
+        self.speed_combo.setCurrentIndex(max(0, index))
+        self.speed_combo.blockSignals(False)
+
+    def configure_speed_choices(self):
+        current_speed = self.speed_combo.currentData()
+        if self.is_animation:
+            preferred = current_speed if current_speed not in (None, 0) else 115200
+            self.populate_speed_combo(self.animation_speed_options, preferred)
+        else:
+            preferred = self.saved_speed if self.saved_speed is not None else current_speed
+            self.populate_speed_combo(self.normal_speed_options, preferred)
+
+    def closeEvent(self, event):
+        # Preserve the normal size even when ReelANSi is closed while maximized.
+        rect = self.normalGeometry() if self.isMaximized() else self.geometry()
+        self.settings.setValue("window_width", rect.width())
+        self.settings.setValue("window_height", rect.height())
+        self.settings.setValue("window_maximized", self.isMaximized())
+        self.settings.remove("window_x")
+        self.settings.remove("window_y")
+        self.settings.sync()
+        super().closeEvent(event)
+
+    def toggle_maximized(self):
+        if self.isMaximized():
+            self.showNormal()
+            QTimer.singleShot(0, lambda: self.resize(self.normal_window_size))
+        else:
+            self.normal_window_size = self.size()
+            self.showMaximized()
+
+    def set_large_ansi_status(self, status=None):
+        self.large_loaded_timer.stop()
+
+        if status == "loading":
+            self.large_ansi_warning.setText("⚠  LARGE ANSI  •  Loading…")
+            self.large_ansi_warning.show()
+        elif status == "loaded":
+            self.large_ansi_warning.setText("⚠  LARGE ANSI  •  Loaded")
+            self.large_ansi_warning.show()
+            self.large_loaded_timer.start()
+        elif status == "large":
+            self.large_ansi_warning.setText("⚠  LARGE ANSI")
+            self.large_ansi_warning.show()
+        else:
+            self.large_ansi_warning.hide()
+
+    def clear_large_loaded_status(self):
+        if self.large_ansi_warning.isVisible():
+            self.set_large_ansi_status("large")
+
+    def textmode_files_in_folder(self, folder):
+        files = [
+            os.path.join(folder, file)
+            for file in os.listdir(folder)
+            if file.lower().endswith((".ans", ".asc"))
+            or file.lower() == "file_id.diz"
+        ]
+
+        # FILE_ID.DIZ traditionally describes the pack, so present it first.
         return sorted(
-            (
-                os.path.join(folder, file)
-                for file in os.listdir(folder)
-                if file.lower().endswith(".ans")
+            files,
+            key=lambda path: (
+                os.path.basename(path).lower() != "file_id.diz",
+                os.path.basename(path).lower(),
             ),
-            key=lambda path: os.path.basename(path).lower(),
         )
 
     def open_ansi(self):
         filename, _ = QFileDialog.getOpenFileName(
             self,
-            "Open ANSI File",
+            "Open Textmode File",
             "",
-            "ANSI Files (*.ans *.ANS)",
+            "Textmode Files (*.ans *.ANS *.asc *.ASC *.diz *.DIZ)",
         )
 
         if filename:
             folder = os.path.dirname(filename)
-            self.ansi_files = self.ansi_files_in_folder(folder)
+            self.ansi_files = self.textmode_files_in_folder(folder)
             self.load_ansi(filename)
 
     def open_folder(self):
         folder = QFileDialog.getExistingDirectory(
             self,
-            "Open ANSI Folder",
+            "Open Textmode Folder",
             "",
         )
 
         if folder:
-            ansi_files = self.ansi_files_in_folder(folder)
+            ansi_files = self.textmode_files_in_folder(folder)
 
             if ansi_files:
                 self.ansi_files = ansi_files
@@ -472,6 +626,13 @@ class ReelANSI(QMainWindow):
         sauce_height = sauce["height"] if sauce and sauce["height"] else 0
         self.ansi_height = sauce_height or 25
         self.is_animation = looks_animated(self.ansi_text)
+        self.configure_speed_choices()
+
+        if sauce_height >= 1000:
+            self.set_large_ansi_status("loading")
+            QApplication.processEvents()
+        else:
+            self.set_large_ansi_status(None)
 
         self.current_file = filename
         name = os.path.basename(filename)
@@ -487,7 +648,17 @@ class ReelANSI(QMainWindow):
             self.play_button.setText("▶ Play")
 
         display_height = sauce_height or self.ansi_height
-        self.file_info.setText(f"{name}   •   {self.ansi_width} × {display_height}")
+        sauce_author = sauce.get("author") if sauce else None
+        sauce_date = sauce.get("date") if sauce else None
+        metadata = [value for value in (sauce_author, sauce_date) if value]
+        metadata_text = "".join(f"   •   {value}" for value in metadata)
+        self.file_info.setText(
+            f"{name}   •   {self.ansi_width} × {display_height}{metadata_text}"
+        )
+        if display_height >= 1000:
+            self.set_large_ansi_status("loaded")
+        else:
+            self.set_large_ansi_status(None)
         self.folder_info.setText(folder)
 
         try:
@@ -515,6 +686,7 @@ class ReelANSI(QMainWindow):
         self.playback_position = 0
         self.playback_remainder = 0.0
         self.viewer.set_screen({}, self.ansi_width, self.ansi_height)
+        self.scroll_area.verticalScrollBar().setValue(0)
 
         if self.speed_combo.currentData() == 0:
             self.finish_instantly()
@@ -559,6 +731,26 @@ class ReelANSI(QMainWindow):
         self.viewer.set_screen(self.stream_parser.cells, self.ansi_width, self.ansi_height)
         self.stop_playback()
 
+    def follow_animation_cursor(self):
+        if self.stream_parser is None:
+            return
+
+        scrollbar = self.scroll_area.verticalScrollBar()
+        viewport_height = self.scroll_area.viewport().height()
+        cursor_top = self.stream_parser.y * self.viewer.cell_height
+        cursor_bottom = cursor_top + self.viewer.cell_height
+        visible_top = scrollbar.value()
+        visible_bottom = visible_top + viewport_height
+
+        # Behave like watching output on a terminal: leave the view alone while
+        # the active drawing row is visible, and scroll only when it moves out
+        # of view. Cursor jumps upward are followed too, which matters for
+        # ansimation that redraws an earlier part of the screen.
+        if cursor_bottom > visible_bottom:
+            scrollbar.setValue(cursor_bottom - viewport_height)
+        elif cursor_top < visible_top:
+            scrollbar.setValue(cursor_top)
+
     def playback_tick(self):
         if not self.is_playing or self.stream_parser is None:
             return
@@ -581,14 +773,22 @@ class ReelANSI(QMainWindow):
         self.stream_parser.feed(self.ansi_text[self.playback_position:end])
         self.playback_position = end
         self.viewer.set_screen(self.stream_parser.cells, self.ansi_width, self.ansi_height)
+        self.follow_animation_cursor()
 
         if self.playback_position >= len(self.ansi_text):
             self.stop_playback()
 
     def playback_speed_changed(self):
+        speed = self.speed_combo.currentData()
+        if speed is None:
+            return
+
+        self.saved_speed = speed
+        self.settings.setValue("playback_speed", speed)
+
         if not self.ansi_text:
             return
-        if self.speed_combo.currentData() == 0:
+        if speed == 0:
             self.finish_instantly()
         elif self.is_playing:
             self.playback_remainder = 0.0
@@ -622,6 +822,8 @@ def main():
 
     window = ReelANSI()
     window.show()
+    if window.restore_maximized:
+        window.showMaximized()
 
     sys.exit(app.exec())
 
