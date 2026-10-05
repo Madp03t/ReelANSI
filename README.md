@@ -1,7 +1,7 @@
 # ReelANSi
 
-ReelANSi is a lightweight Linux viewer for ANSI and textmode art, built for
-accurate rendering, smooth browsing, and classic BBS-style playback.
+ReelANSi is a lightweight Linux viewer for ANSI and textmode art, built
+for accurate rendering, smooth browsing, and classic BBS-style playback.
 
 Point it at a file or a folder and enjoy the art.
 
@@ -24,7 +24,7 @@ ReelANSi is strictly a viewer, not an editor.
 
 ### Files & Browsing
 
--   Open individual `.ANS`, `.ASC`, and `FILE_ID.DIZ` files
+-   Open individual `.ANS`, `.ASC`, `.FLP`, and `FILE_ID.DIZ` files
 -   Open/select a folder containing supported textmode files
 -   Automatically browse supported files in the same folder
 -   `FILE_ID.DIZ` presented first when present
@@ -56,6 +56,10 @@ ReelANSi is strictly a viewer, not an editor.
 -   Remembers normal window size and maximized state
 -   Remembers playback speed
 -   Horizontally centers artwork narrower than the viewport
+-   Artwork zoom: 50%, 75%, 100%, 125%, 150%, and 200%
+-   Fit artwork to window
+-   Keyboard zoom controls: Ctrl++, Ctrl+-, and Ctrl+0
+-   Current zoom percentage displayed in the interface
 -   Minimal interface focused on the artwork
 
 ## In Development
@@ -68,6 +72,6 @@ ReelANSi is strictly a viewer, not an editor.
 
 ## Status
 
-Early development. ANSI rendering, including SAUCE-aware iCE colors, mixed
-textmode folder browsing, progressive playback, and ANSI animation playback
-are working.
+Early development. ANSI rendering, including SAUCE-aware iCE colors,
+mixed textmode folder browsing, progressive playback, and ANSI animation
+playback are working.
