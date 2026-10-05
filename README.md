@@ -1,10 +1,9 @@
 # ReelANSi
 
-ReelANSi is a lightweight Linux application for viewing, browsing, and
-playing ANSI/textmode artwork and animations.
+ReelANSi is a lightweight Linux viewer for ANSI and textmode art, built for
+accurate rendering, smooth browsing, and classic BBS-style playback.
 
-Open an individual textmode file or an entire folder, then browse
-supported files without repeatedly opening and closing files.
+Point it at a file or a folder and enjoy the art.
 
 ReelANSi is strictly a viewer, not an editor.
 
