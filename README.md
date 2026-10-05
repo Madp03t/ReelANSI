@@ -2,23 +2,30 @@
 
 ReelANSI is a lightweight Linux application for viewing and browsing ANSI artwork, including properly playing ANSI animations.
 
-Open an individual ANSI file or browse an entire folder without repeatedly opening and closing files. 
+Open an individual ANSI file or browse an entire folder without repeatedly opening and closing files.
 
 ReelANSI is strictly a viewer, not an editor.
 
-## Planned for v0.1
+## Current Features
 
 ### ANSI Rendering
-- Correctly render CP437 ANSI artwork and colors
-- Support SAUCE metadata and artwork dimensions
-- Scroll artwork larger than the viewing area
+- CP437 ANSI artwork
+- IBM VGA 9×16 font rendering
+- Classic 16-color VGA palette
+- SAUCE metadata and artwork dimensions
+- Pixel-crisp rendering without text antialiasing
 
-### Files & Browsing
+### Files
 - Open individual `.ANS` files
+- Display the current filename and artwork dimensions
+
+## Planned for v0.1
+
+### Browsing
 - Open folders containing ANSI files
 - Previous / Next navigation
 - Left/right arrow keyboard navigation
-- Display the current filename
+- Scroll artwork larger than the viewing area
 
 ### Animation
 - Animated ANSI playback
@@ -32,4 +39,4 @@ ReelANSI is strictly a viewer, not an editor.
 
 ## Status
 
-Early development.
+Early development. Basic ANSI rendering is working.
