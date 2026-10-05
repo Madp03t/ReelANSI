@@ -19,7 +19,7 @@ ReelANSI is strictly a viewer, not an editor.
 - Open individual `.ANS` files
 - Display the current filename and artwork dimensions
 
-## Planned for v0.1
+## In Development
 
 ### Browsing
 - Open folders containing ANSI files

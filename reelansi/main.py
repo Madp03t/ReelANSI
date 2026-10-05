@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QVBoxLayout,
     QWidget,
+    QScrollArea,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase, QPainter
@@ -150,6 +151,19 @@ class ANSIViewer(QWidget):
 
     def set_ansi(self, lines):
         self.lines = lines
+
+        if lines:
+            width = max(
+                (x for cells in lines.values() for x, *_ in cells),
+                default=0,
+            ) + 1
+            height = max(lines.keys()) + 1
+
+            self.setFixedSize(
+                width * self.cell_width,
+                height * self.cell_height,
+            )
+
         self.update()
 
     def paintEvent(self, event):
@@ -201,8 +215,12 @@ class ReelANSI(QMainWindow):
         layout = QVBoxLayout(container)
 
         self.viewer = ANSIViewer()
-        layout.addWidget(self.viewer, 1)
 
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidget(self.viewer)
+        self.scroll_area.setWidgetResizable(False)
+
+        layout.addWidget(self.scroll_area, 1)
         self.file_info = QLabel("No file open")
         layout.addWidget(self.file_info)
 
