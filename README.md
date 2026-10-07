@@ -7,6 +7,8 @@ Point it at a file or a folder and enjoy the art.
 
 ReelANSi is strictly a viewer, not an editor.
 
+![ReelANSi](screenshots/reelansi.png)
+
 ## Current Features
 
 ### ANSI Rendering
