@@ -9,6 +9,16 @@ ReelANSi is strictly a viewer, not an editor.
 
 ![ReelANSi](screenshots/reelansi.png)
 
+## Download
+
+**[Download ReelANSi v0.1 for Linux](https://github.com/Madp03t/ReelANSi/releases/tag/v0.1)**
+
+Available as a portable AppImage for 64-bit Linux (x86_64). No Python or PySide6 installation required.
+
+Download `ReelANSi-v0.1-x86_64.AppImage`, make it executable, and run it.
+
+This is an early development release. Feedback and bug reports are welcome.
+
 ## Current Features
 
 ### ANSI Rendering
